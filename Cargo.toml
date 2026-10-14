@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.88"
 description = "LLM-powered question bank service for OCS AnswererWrapper (OpenAI / Anthropic compatible)"
 license = "MIT"
+repository = "https://github.com/majianyu2007/ocs-ai-answerer"
 
 [dependencies]
 axum = "0.8.9"

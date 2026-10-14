@@ -187,6 +187,106 @@ fn endpoint_resolution() {
     );
 }
 
+#[test]
+fn responses_config_selects_native_endpoint() {
+    let kind: ProviderKind = "openai-responses".parse().unwrap();
+    assert_eq!(kind, ProviderKind::OpenAiResponses);
+    let cfg: AiConfig = toml::from_str("provider = 'openai-responses'").unwrap();
+    assert_eq!(cfg.resolved_endpoint(), "https://api.openai.com/v1/responses");
+    for (base, expected) in [
+        ("https://example.com", "https://example.com/v1/responses"),
+        ("https://example.com/v1/", "https://example.com/v1/responses"),
+        ("https://example.com/api/v1", "https://example.com/api/v1/responses"),
+    ] {
+        assert_eq!(ai_config(kind, base).resolved_endpoint(), expected);
+    }
+    let custom = AiConfig {
+        endpoint: "https://example.com/custom".into(),
+        ..cfg
+    };
+    assert_eq!(custom.resolved_endpoint(), "https://example.com/custom");
+}
+
+#[test]
+fn responses_preserves_multimodal_input_and_repair_history() {
+    use ocs_ai_answerer::provider::{ImageInput, Message};
+    let cfg = ai_config(ProviderKind::OpenAiResponses, "https://example.com/v1");
+    let client = AiClient::new(&cfg).unwrap();
+    let request = ChatRequest {
+        system: "Return JSON".into(),
+        messages: vec![
+            Message {
+                images: vec![ImageInput::Base64 {
+                    media_type: "image/png".into(),
+                    data: "aGVsbG8=".into(),
+                }],
+                ..Message::user("Read this")
+            },
+            Message::assistant("bad answer"),
+            Message::user("Repair JSON"),
+        ],
+        temperature: None,
+    };
+    let body = client.request_body(&request);
+    assert_eq!(body["instructions"], "Return JSON");
+    assert_eq!(body["input"][0]["content"][0], json!({"type":"input_text","text":"Read this"}));
+    assert_eq!(body["input"][0]["content"][1]["image_url"], "data:image/png;base64,aGVsbG8=");
+    assert_eq!(body["input"][1]["role"], "assistant");
+    assert_eq!(body["input"][1]["content"][0], json!({"type":"output_text","text":"bad answer"}));
+    assert_eq!(body["input"][2]["content"][0]["text"], "Repair JSON");
+    assert_eq!(body["max_output_tokens"], 256);
+    assert!(body.get("max_tokens").is_none());
+}
+
+#[tokio::test]
+async fn responses_extracts_only_completed_assistant_text() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("authorization", "Bearer sk-test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "object": "response", "status": "completed", "model": "responses-model",
+            "output": [
+                {"type":"reasoning","summary":[{"type":"summary_text","text":"private reasoning"}]},
+                {"type":"function_call","arguments":"not an answer"},
+                {"type":"message","role":"assistant","status":"completed","phase":"commentary",
+                    "content":[{"type":"output_text","text":"Let me check."}]},
+                {"type":"message","role":"assistant","status":"completed","content":[
+                    {"type":"output_text","text":"{\"answer\":"},
+                    {"type":"output_text","text":"\"B\"}"}
+                ]}
+            ]
+        })))
+        .expect(1)
+        .mount(&server).await;
+    let client = AiClient::new(&ai_config(ProviderKind::OpenAiResponses, &server.uri())).unwrap();
+    let response = client.complete(&req()).await.unwrap();
+    assert_eq!(response.content, "{\"answer\":\"B\"}");
+    assert_eq!(response.model.as_deref(), Some("responses-model"));
+}
+
+#[test]
+fn responses_rejects_partial_failed_refused_and_non_answer_output() {
+    use ocs_ai_answerer::provider::{OpenAiResponsesProtocol, Protocol};
+    for status in ["incomplete", "failed", "queued", "in_progress", "cancelled"] {
+        let result = OpenAiResponsesProtocol.parse_response(json!({
+            "status":status,
+            "output":[{"type":"message","role":"assistant","status":"completed",
+                "content":[{"type":"output_text","text":"partial answer"}]}]
+        }));
+        assert!(result.is_err(), "must not accept {status}");
+    }
+    for output in [
+        json!([]),
+        json!([{"type":"message","role":"assistant","status":"completed","content":[{"type":"refusal","refusal":"No"}]}]),
+        json!([{"type":"reasoning","content":[{"type":"output_text","text":"not final"}]}]),
+        json!([{"type":"message","role":"user","content":[{"type":"output_text","text":"not assistant"}]}]),
+        json!([{"type":"message","role":"assistant","status":"in_progress","content":[{"type":"output_text","text":"partial"}]}]),
+    ] {
+        assert!(OpenAiResponsesProtocol.parse_response(json!({"status":"completed","output":output})).is_err());
+    }
+}
+
 #[tokio::test]
 async fn openai_error_401_is_not_retried() {
     let server = MockServer::start().await;

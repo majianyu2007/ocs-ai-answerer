@@ -30,7 +30,7 @@
 
 ## 核心功能
 
-- **两种协议**：OpenAI Chat Completions（`/v1/chat/completions`）与 Anthropic Messages（`/v1/messages`），修改配置即可切换，无需重新编译。
+- **三种协议**：OpenAI Chat Completions（`/v1/chat/completions`）、OpenAI Responses（`/v1/responses`）与 Anthropic Messages（`/v1/messages`），修改配置即可切换，无需重新编译。
 - **兼容各类服务**：OpenAI、DeepSeek、OpenRouter、硅基流动、阿里云百炼、Ollama、自建代理/网关等，可自定义 Base URL、完整 Endpoint、API Key、模型、Temperature、Max Tokens、超时、请求头和额外请求参数。
 - **原生适配 OCS `AnswererWrapper`**：提供可直接导入的 [`ocs_config.json`](ocs_config.json)，服务端也可通过 `/ocs-config` 动态生成。
 - **四种题型**：单选（single）、多选（multiple）、判断（judgement）、填空（completion），以及未知题型的自动推断。
@@ -56,6 +56,7 @@ OCS 脚本 ──(AnswererWrapper: POST/GET /api/answer)──▶ Axum HTTP 层 
                           Provider 抽象层 (src/provider)     OCS 匹配算法移植 (ocs.rs)
                           ├── AiClient：连接池/超时/重试/错误映射
                           ├── OpenAiProtocol   → POST …/chat/completions
+                          ├── OpenAiResponsesProtocol → POST …/responses
                           └── AnthropicProtocol → POST …/v1/messages
 ```
 
@@ -85,7 +86,7 @@ ocs-ai-answerer/
 │   ├── config.rs            # 配置结构、环境变量覆盖、启动校验
 │   ├── error.rs             # 分类错误类型
 │   ├── api/                 # HTTP 层：路由、处理器、请求/响应类型、OCS 配置生成
-│   ├── provider/            # AI Provider 抽象层：mod.rs（公共逻辑）、openai.rs、anthropic.rs
+│   ├── provider/            # AI Provider 抽象层：mod.rs（公共逻辑）、openai.rs、responses.rs、anthropic.rs
 │   └── answer/              # 答题流程 mod.rs、question.rs（题目模型）、prompt.rs、normalize.rs、
 │                            # ocs.rs（OCS 匹配算法移植）、cache.rs（答案缓存）、ensemble.rs（投票）
 └── tests/                   # provider_tests / answer_tests / api_tests / pipeline_tests
@@ -197,6 +198,37 @@ max_tokens  = 1024
 
 - **推理模型**（`deepseek-reasoner`、o 系列等）：输出前会消耗大量 token 思考，请把 `max_tokens` 调到 4096 以上，并适当增大 `timeout_secs`；部分模型不支持 `temperature`，可删除该行（不设置就不会发送）。程序会自动忽略回复中的 `<think>…</think>` 内容。
 
+### OpenAI Responses
+
+使用原生 Responses API 时，设置 `provider = "openai-responses"`（环境变量为 `OCS_AI_PROVIDER=openai-responses`）。原有 `openai` 模式仍使用 Chat Completions，不会自动切换协议。
+
+```toml
+[ai]
+provider = "openai-responses"
+base_url = "https://api.openai.com/v1"
+model = "gpt-4.1"
+max_tokens = 8192
+# API Key 通过 OCS_AI_API_KEY 环境变量设置
+```
+
+该示例请求 `https://api.openai.com/v1/responses`。`base_url` 留空时默认使用 `https://api.openai.com/v1`；带路径时追加 `/responses`，仅有域名时追加 `/v1/responses`。也可以用 `endpoint`（或 `OCS_AI_ENDPOINT`）指定完整地址，覆盖自动拼接。
+
+认证仍使用 Bearer API Key。请求将系统提示放入 `instructions`、消息放入 `input`，`max_tokens` 映射为 `max_output_tokens`，默认发送 `stream: false`、`store: false`。支持图片输入及答案修复所需的助手历史消息；只读取已完成响应中助手的 `output_text`，失败、未完成或非最终输出不会作为答案。额外参数应使用 Responses API 的字段，而非 Chat Completions 的 `response_format` 等字段。
+
+使用 Docker 的 `.env` 配置时，对应写法如下（不要将真实密钥提交到仓库）：
+
+```dotenv
+OCS_AI_PROVIDER=openai-responses
+OCS_AI_BASE_URL=https://api.openai.com/v1
+OCS_AI_MODEL=gpt-4.1
+OCS_AI_MAX_TOKENS=8192
+# OCS_AI_API_KEY 在本机或服务器的私密 .env 中填写
+```
+
+修改 `.env` 后执行 `docker compose up -d` 重新创建服务，使新的环境变量生效；仅 `docker compose restart` 不会更新容器环境变量。如果 Compose 的 `environment` 中已设置同名变量，应同时修改该处，否则它会覆盖 `env_file`。
+
+`store: false` 是向上游发送的不存储请求选项，不代表第三方网关不会记录请求。API Key 只用于服务器调用上游；OCS 导入配置携带的是独立的 `server.access_token`，不是上游 API Key，导入配置同样需要保密。
+
 ## Anthropic Compatible API 配置
 
 `provider = "anthropic"`，请求 `POST {base_url}/v1/messages`，自动发送 `x-api-key` 与 `anthropic-version` 请求头，`system` 提示词使用顶层 `system` 字段，用户消息使用 `content` 内容块。
@@ -228,7 +260,9 @@ docker compose logs -f
 
 答案缓存保存在宿主机的 `./data` 目录，容器重建后仍然有效。
 
-默认只映射到本机 `127.0.0.1:3000`。如需远程访问，把 `compose.yaml` 中的端口改为 `"3000:3000"`，**并务必设置 `OCS_ACCESS_TOKEN`**。
+默认只映射到本机 `127.0.0.1:3000`。远程访问建议保留此绑定，通过 HTTPS 反向代理或隧道（如 Cloudflare Tunnel）对外提供服务；原生运行时也应绑定回环地址。仅放行 `/api/answer` 与 `/ocs-config`，将 `/health`、`/api/cache` 及其子路径保留为本机管理接口，其余路径默认拒绝。
+
+**务必设置独立、随机的 `OCS_ACCESS_TOKEN`**，并通过 `OCS_PUBLIC_URL` 指定对外 HTTPS 地址。`OCS_AI_API_KEY` 是服务端调用上游模型的密钥，不能作为访问令牌，也不要填进 OCS 客户端配置。若确需直接开放端口，可将 compose 端口改为 `"3000:3000"`，但仍需配置访问令牌、防火墙与 HTTPS。
 
 想使用完整的配置文件（自定义提示词等）时，复制 `config.example.toml` 为 `config.toml`，并在 `compose.yaml` 中取消 `volumes` 的注释。容器内会自动设置 `OCS_SERVER_HOST=0.0.0.0`。
 
@@ -520,13 +554,13 @@ OCS 匹配选项的方式（已阅读 OCS 源码 `core/worker/resolvers/*` 确�
 | `server.access_token` | 空 | `OCS_ACCESS_TOKEN` | 访问令牌，空表示不校验 |
 | `server.public_url` | 空 | `OCS_PUBLIC_URL` | 对外地址，用于生成 OCS 配置 |
 | `server.cors` | `true` | | 是否允许跨域 |
-| `ai.provider` | `openai` | `OCS_AI_PROVIDER` | `openai` 或 `anthropic` |
+| `ai.provider` | `openai` | `OCS_AI_PROVIDER` | `openai`（Chat Completions）、`openai-responses` 或 `anthropic` |
 | `ai.base_url` | 官方地址 | `OCS_AI_BASE_URL` | API 根地址 |
 | `ai.endpoint` | 空 | `OCS_AI_ENDPOINT` | 完整请求地址，优先于 base_url |
 | `ai.api_key` | 空（必填） | `OCS_AI_API_KEY` | API Key |
 | `ai.model` | 空（必填） | `OCS_AI_MODEL` | 模型名称 |
 | `ai.temperature` | `0.1` | `OCS_AI_TEMPERATURE` | 不设置则不发送 |
-| `ai.max_tokens` | `2048` | `OCS_AI_MAX_TOKENS` | OpenAI 不设置则不发送；Anthropic 默认 1024 |
+| `ai.max_tokens` | `2048` | `OCS_AI_MAX_TOKENS` | Responses 映射为 `max_output_tokens`；OpenAI 为 None 时不发送；Anthropic 为 None 时使用 1024 |
 | `ai.timeout_secs` | `40` | `OCS_AI_TIMEOUT_SECS` | 单次请求超时 |
 | `ai.connect_timeout_secs` | `10` | | 连接超时 |
 | `ai.max_retries` | `1` | `OCS_AI_MAX_RETRIES` | 仅对网络错误、超时、429、5xx 重试 |
@@ -572,6 +606,8 @@ OCS 匹配选项的方式（已阅读 OCS 源码 `core/worker/resolvers/*` 确�
 | `provider_connect` | 网络不通、DNS 失败、需要代理。程序会读取系统代理及 `HTTPS_PROXY` 环境变量 |
 | `provider_timeout` / `timeout` | 模型响应太慢，增大 `ai.timeout_secs` 或更换更快的模型；注意总时间要小于 OCS 的 60 秒 |
 | `provider_empty_content` | 推理模型的 `max_tokens` 太小，思考阶段就用完了，调大到 8192 左右 |
+| `provider_invalid_response` 提示缺少 `choices`，实际返回 `object: "response"` 和 `output` | 网关返回的是 Responses 格式。确认它支持 `/v1/responses` 后，将 `provider` 改为 `openai-responses`；仅修改模型名称或 `endpoint` 不会切换请求与解析协议 |
+| Responses 响应未完成，或包含 `incomplete_details` | 服务不会使用部分输出作为答案。检查上游状态、输出额度和超时；若为 `max_output_tokens` 耗尽，可调大配置中的 `max_tokens` |
 | 日志提示「模型似乎不支持图片输入」 | 当前模型不支持视觉，图片题已降级为纯文本；换用视觉模型或设置 `vision = false` |
 | 图片题答错 | 确认 OCS 已开启「图片题优化」且使用了最新的 `ocs_config.json`（需为 POST 且包含 `images` 字段），并使用支持图片的模型 |
 | 某道题缓存了错误答案 | `POST /api/cache/forget` 删除该题，或请求时带 `"no_cache": true` |
@@ -591,7 +627,7 @@ cargo build --release          # 构建正式版
 
 测试覆盖：
 
-- `tests/provider_tests.rs`：OpenAI/Anthropic 请求格式、自定义 Endpoint 与请求头、额外参数、标准响应解析、401/403/429/5xx/HTTP 200 中的错误对象、超时、连接失败、非 JSON 响应、空内容、重试策略。
+- `tests/provider_tests.rs`：OpenAI Chat Completions / Responses / Anthropic 请求格式、自定义 Endpoint 与请求头、额外参数、标准响应解析、401/403/429/5xx/HTTP 200 中的错误对象、超时、连接失败、非 JSON 响应、空内容、重试策略。
 - `tests/answer_tests.rs`：选项解析、题型推断、提示词构建、单选/多选/判断/填空的各种输出格式、JSON 与非标准回退、误判防护、无法识别的处理，以及用 OCS 匹配算法验证返回值能被 OCS 正确选中。
 - `tests/pipeline_tests.rs`：答案缓存（命中、持久化、删除、失败不缓存）、并发相同题目合并、格式自修复、图片发送与自动降级、多模型投票（提前结束、多数票、裁判、投票者失败、超时保留已有投票）、并发限制、Retry-After。
 - `tests/api_tests.rs`：GET/POST、缺失参数、上游异常、超时、访问令牌、健康检查、OCS 配置生成、`ocs_config.json` 与生成结果一致、并发请求互不干扰。

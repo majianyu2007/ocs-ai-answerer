@@ -55,6 +55,8 @@ impl Default for ServerConfig {
 pub enum ProviderKind {
     #[serde(alias = "openai-compatible", alias = "openai_compatible")]
     OpenAi,
+    #[serde(rename = "openai-responses")]
+    OpenAiResponses,
     #[serde(
         alias = "anthropic-compatible",
         alias = "anthropic_compatible",
@@ -67,6 +69,7 @@ impl ProviderKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::OpenAi => "openai",
+            Self::OpenAiResponses => "openai-responses",
             Self::Anthropic => "anthropic",
         }
     }
@@ -84,11 +87,12 @@ impl FromStr for ProviderKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim().to_ascii_lowercase().as_str() {
             "openai" | "openai-compatible" | "openai_compatible" => Ok(Self::OpenAi),
+            "openai-responses" => Ok(Self::OpenAiResponses),
             "anthropic" | "anthropic-compatible" | "anthropic_compatible" | "claude" => {
                 Ok(Self::Anthropic)
             }
             other => Err(format!(
-                "不支持的 provider \"{other}\"，可选值: openai, anthropic"
+                "不支持的 provider \"{other}\"，可选值: openai, openai-responses, anthropic"
             )),
         }
     }
@@ -106,7 +110,8 @@ pub struct AiConfig {
     pub model: String,
     /// Omitted from the request when unset (some reasoning models reject it).
     pub temperature: Option<f64>,
-    /// Omitted for OpenAI when unset; Anthropic requires it and falls back to 1024.
+    /// Omitted for OpenAI when unset; Responses maps it to `max_output_tokens`.
+    /// Anthropic requires it and falls back to 1024.
     pub max_tokens: Option<u32>,
     pub timeout_secs: u64,
     pub connect_timeout_secs: u64,
@@ -210,16 +215,17 @@ impl AiConfig {
     }
     pub fn default_base_url(&self) -> &'static str {
         match self.provider {
-            ProviderKind::OpenAi => "https://api.openai.com/v1",
+            ProviderKind::OpenAi | ProviderKind::OpenAiResponses => "https://api.openai.com/v1",
             ProviderKind::Anthropic => "https://api.anthropic.com",
         }
     }
 
     /// Resolves the final request URL.
     ///
-    /// OpenAI-style base URLs conventionally include the version (`.../v1`), so only
-    /// `/chat/completions` is appended unless the base has no path at all. Anthropic-style
-    /// base URLs conventionally omit it, so `/v1/messages` is appended unless it already ends in `/v1`.
+    /// OpenAI-style base URLs conventionally include the version (`.../v1`), so
+    /// `/chat/completions` or `/responses` is appended, with `/v1` added for bare hosts.
+    /// Anthropic-style base URLs conventionally omit it, so `/v1/messages` is appended
+    /// unless the base already ends in `/v1`.
     pub fn resolved_endpoint(&self) -> String {
         if !self.endpoint.trim().is_empty() {
             return self.endpoint.trim().to_string();
@@ -236,6 +242,8 @@ impl AiConfig {
         match self.provider {
             ProviderKind::OpenAi if has_path => format!("{base}/chat/completions"),
             ProviderKind::OpenAi => format!("{base}/v1/chat/completions"),
+            ProviderKind::OpenAiResponses if has_path => format!("{base}/responses"),
+            ProviderKind::OpenAiResponses => format!("{base}/v1/responses"),
             ProviderKind::Anthropic if base.ends_with("/v1") => format!("{base}/messages"),
             ProviderKind::Anthropic => format!("{base}/v1/messages"),
         }

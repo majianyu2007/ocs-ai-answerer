@@ -20,7 +20,7 @@ public_url = ""
 cors = true
 
 [ai]
-# 协议类型："openai"（OpenAI Chat Completions 兼容）或 "anthropic"（Anthropic Messages 兼容）
+# 协议类型："openai"（Chat Completions）、"openai-responses"（Responses）或 "anthropic"（Messages）
 provider = "openai"
 # API 根地址：
 #   openai 协议填写到版本号为止，程序会自动拼接 /chat/completions
@@ -30,6 +30,9 @@ provider = "openai"
 #     硅基流动:     https://api.siliconflow.cn/v1
 #     阿里云百炼:   https://dashscope.aliyuncs.com/compatible-mode/v1
 #     Ollama:      http://127.0.0.1:11434/v1
+#   openai-responses 协议带路径时追加 /responses，仅域名时追加 /v1/responses
+#     例如 https://api.openai.com/v1 搭配支持 Responses 的模型（如 gpt-4.1）
+#     默认发送 stream: false、store: false；openai 仍使用 Chat Completions
 #   anthropic 协议填写域名即可，程序会自动拼接 /v1/messages
 #     Anthropic:   https://api.anthropic.com
 # 留空时使用对应协议的官方地址
@@ -43,7 +46,7 @@ model = "gpt-4o-mini"
 # 采样温度，答题建议 0 ~ 0.3。注释掉此行则不发送该参数（部分推理模型不支持）
 temperature = 0.1
 # 最大输出 token 数（含分析过程）。推理模型（如 deepseek-reasoner、o 系列）请调大到 8192 左右
-# openai 协议注释掉此行则不发送；anthropic 协议必填，未设置时默认 1024
+# openai-responses 映射为 max_output_tokens；省略此项使用配置默认值 2048
 max_tokens = 2048
 # 单次请求超时（秒）
 timeout_secs = 40
@@ -73,9 +76,9 @@ name = ""
 # top_p = 0.9
 # 关闭 Qwen3 等模型的思考模式：
 # enable_thinking = false
-# OpenAI 推理模型使用 max_completion_tokens 时：
+# OpenAI Chat Completions 推理模型使用 max_completion_tokens 时：
 # max_completion_tokens = 4096
-# 结构化输出（仅支持该参数的服务可开启）：
+# Chat Completions 结构化输出（仅支持该参数的服务可开启；Responses 使用其自身字段）：
 # response_format = { type = "json_object" }
 
 [answer]

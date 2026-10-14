@@ -10,6 +10,7 @@
 
 mod anthropic;
 mod openai;
+mod responses;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,6 +23,7 @@ use serde_json::{Map, Value};
 
 pub use anthropic::AnthropicProtocol;
 pub use openai::OpenAiProtocol;
+pub use responses::OpenAiResponsesProtocol;
 
 use crate::config::{AiConfig, ProviderKind};
 use crate::error::{ProviderError, truncate};
@@ -161,6 +163,7 @@ pub trait Protocol: Send + Sync {
 pub fn protocol_for(kind: ProviderKind) -> Box<dyn Protocol> {
     match kind {
         ProviderKind::OpenAi => Box::new(OpenAiProtocol),
+        ProviderKind::OpenAiResponses => Box::new(OpenAiResponsesProtocol),
         ProviderKind::Anthropic => Box::new(AnthropicProtocol),
     }
 }
