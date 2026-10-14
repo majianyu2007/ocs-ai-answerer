@@ -1,7 +1,7 @@
 use reqwest::header::{AUTHORIZATION, HeaderMap};
 use serde_json::{Map, Value, json};
 
-use super::{ChatRequest, ChatResponse, Protocol, header_value};
+use super::{ChatRequest, ChatResponse, Protocol, Role, header_value};
 use crate::config::{AiConfig, ProviderKind};
 use crate::error::ProviderError;
 
@@ -23,11 +23,25 @@ impl Protocol for OpenAiProtocol {
     }
 
     fn build_body(&self, cfg: &AiConfig, req: &ChatRequest) -> Map<String, Value> {
-        let mut messages = Vec::with_capacity(2);
+        let mut messages = Vec::with_capacity(req.messages.len() + 1);
         if !req.system.is_empty() {
             messages.push(json!({ "role": "system", "content": req.system }));
         }
-        messages.push(json!({ "role": "user", "content": req.user }));
+        for m in &req.messages {
+            let role = match m.role {
+                Role::User => "user",
+                Role::Assistant => "assistant",
+            };
+            if m.images.is_empty() {
+                messages.push(json!({ "role": role, "content": m.text }));
+            } else {
+                let mut parts = vec![json!({ "type": "text", "text": m.text })];
+                parts.extend(m.images.iter().map(
+                    |img| json!({ "type": "image_url", "image_url": { "url": img.to_data_url() } }),
+                ));
+                messages.push(json!({ "role": role, "content": parts }));
+            }
+        }
 
         let mut body = Map::new();
         body.insert("model".into(), json!(cfg.model));

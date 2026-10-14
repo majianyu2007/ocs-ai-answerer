@@ -35,7 +35,10 @@ pub enum ProviderError {
     #[error("AI 接口认证失败 (HTTP {status})，请检查 API Key 与权限: {message}")]
     Unauthorized { status: u16, message: String },
     #[error("AI 接口触发限流 (HTTP 429): {message}")]
-    RateLimited { message: String },
+    RateLimited {
+        message: String,
+        retry_after: Option<u64>,
+    },
     #[error("AI 上游服务异常 (HTTP {status}): {message}")]
     Server { status: u16, message: String },
     #[error("AI 接口返回错误 (HTTP {status}): {message}")]

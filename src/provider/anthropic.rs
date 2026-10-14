@@ -1,7 +1,7 @@
 use reqwest::header::{HeaderMap, HeaderName};
 use serde_json::{Map, Value, json};
 
-use super::{ChatRequest, ChatResponse, Protocol, header_value};
+use super::{ChatRequest, ChatResponse, ImageInput, Protocol, Role, header_value};
 use crate::config::{AiConfig, ProviderKind};
 use crate::error::ProviderError;
 
@@ -39,13 +39,34 @@ impl Protocol for AnthropicProtocol {
         if !req.system.is_empty() {
             body.insert("system".into(), json!(req.system));
         }
-        body.insert(
-            "messages".into(),
-            json!([{
-                "role": "user",
-                "content": [{ "type": "text", "text": req.user }]
-            }]),
-        );
+        let messages: Vec<Value> = req
+            .messages
+            .iter()
+            .map(|m| {
+                let role = match m.role {
+                    Role::User => "user",
+                    Role::Assistant => "assistant",
+                };
+                // Images first, as Anthropic recommends.
+                let mut content: Vec<Value> = m
+                    .images
+                    .iter()
+                    .map(|img| match img {
+                        ImageInput::Base64 { media_type, data } => json!({
+                            "type": "image",
+                            "source": { "type": "base64", "media_type": media_type, "data": data }
+                        }),
+                        ImageInput::Url(url) => json!({
+                            "type": "image",
+                            "source": { "type": "url", "url": url }
+                        }),
+                    })
+                    .collect();
+                content.push(json!({ "type": "text", "text": m.text }));
+                json!({ "role": role, "content": content })
+            })
+            .collect();
+        body.insert("messages".into(), Value::Array(messages));
         if let Some(t) = cfg.temperature {
             // Anthropic accepts 0..=1; clamp so a shared OpenAI-style config keeps working.
             body.insert("temperature".into(), json!(t.clamp(0.0, 1.0)));
