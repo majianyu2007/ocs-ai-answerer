@@ -278,11 +278,12 @@ fn choices_from_fragment(fragment: &str, q: &Question) -> Option<Vec<usize>> {
         return None;
     }
 
-    if let Some(i) = exact_option(s, q) {
-        return Some(vec![i]);
-    }
+    // Letters first: the prompt asks for letters, and option texts like "C#" normalize to "c".
     if let Some(letters) = letters_only(s, q) {
         return Some(letters);
+    }
+    if let Some(i) = exact_option(s, q) {
+        return Some(vec![i]);
     }
     if let Some(c) = LABELED_OPTION.captures(s) {
         let idx = letter_index(c[1].chars().next()?, q)?;
@@ -396,7 +397,16 @@ fn leading_letters(s: &str, q: &Question) -> Option<Vec<usize>> {
     if !ok {
         return None;
     }
-    letters.into_iter().map(|c| letter_index(c, q)).collect()
+    let indices: Option<Vec<usize>> = letters.into_iter().map(|c| letter_index(c, q)).collect();
+    // "C. Rust" where Rust is option B: contradictory, do not guess.
+    if let Some([idx]) = indices.as_deref() {
+        let tail = rest.trim_start_matches(['.', '．', '、', ':', '：', ')', '）', ']', '】', ' ']);
+        let tail = strip_wrapping(tail).trim_end_matches(TRAILING_PUNCT);
+        if exact_option(tail, q).is_some_and(|other| other != *idx) {
+            return None;
+        }
+    }
+    indices
 }
 
 const TRUE_WORDS: &[&str] = &[
@@ -623,9 +633,19 @@ fn format_choices(indices: &[usize], q: &Question, cfg: &AnswerConfig) -> String
         }
     };
 
+    // `===` is the first separator OCS tries, so it still splits correctly when option texts
+    // themselves contain `#` (e.g. "C#").
+    let text_strict = indices
+        .iter()
+        .map(|&i| q.options[i].text.as_str())
+        .collect::<Vec<_>>()
+        .join("===");
+
     let candidates: Vec<&str> = match cfg.choice_format {
-        ChoiceFormat::Letter => vec![&letters_sep, &letters_plain, &text],
-        ChoiceFormat::Text | ChoiceFormat::Auto => vec![&text, &letters_sep, &letters_plain],
+        ChoiceFormat::Letter => vec![&letters_sep, &letters_plain, &text, &text_strict],
+        ChoiceFormat::Text | ChoiceFormat::Auto => {
+            vec![&text, &text_strict, &letters_sep, &letters_plain]
+        }
     };
     if let Some(found) = candidates.iter().find(|c| ocs_selects(c)) {
         return found.to_string();
