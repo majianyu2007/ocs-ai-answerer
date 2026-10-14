@@ -1,0 +1,97 @@
+# ocs-ai-answerer 配置文件示例
+# 使用方法：复制本文件为 config.toml，至少填写 [ai] 中的 api_key 与 model 即可启动。
+# 关键配置也可通过环境变量覆盖（见 .env.example），环境变量优先级高于本文件。
+
+[server]
+# 监听地址：本机使用填 127.0.0.1；需要局域网/服务器/Docker 访问时填 0.0.0.0
+host = "127.0.0.1"
+port = 3000
+# 日志级别：trace / debug / info / warn / error；debug 会打印提示词与模型原始输出
+log_level = "info"
+# 单道题的最长处理时间（秒，含重试）。OCS 等待题库 60 秒后判定超时，建议保持在 55 以内
+request_timeout_secs = 55
+# 访问令牌：留空表示不校验。部署到公网时务必设置，否则任何人都能消耗你的 API 额度。
+# 设置后 /ocs-config 生成的配置会自动带上 token。
+access_token = ""
+# 对外访问地址，用于 /ocs-config 生成题库配置，例如 "https://answer.example.com"
+# 留空时根据请求的 Host 自动推断
+public_url = ""
+# 是否允许跨域（OCS 使用 fetch 请求方式时需要）
+cors = true
+
+[ai]
+# 协议类型："openai"（OpenAI Chat Completions 兼容）或 "anthropic"（Anthropic Messages 兼容）
+provider = "openai"
+# API 根地址：
+#   openai 协议填写到版本号为止，程序会自动拼接 /chat/completions
+#     OpenAI:      https://api.openai.com/v1
+#     DeepSeek:    https://api.deepseek.com/v1
+#     OpenRouter:  https://openrouter.ai/api/v1
+#     硅基流动:     https://api.siliconflow.cn/v1
+#     阿里云百炼:   https://dashscope.aliyuncs.com/compatible-mode/v1
+#     Ollama:      http://127.0.0.1:11434/v1
+#   anthropic 协议填写域名即可，程序会自动拼接 /v1/messages
+#     Anthropic:   https://api.anthropic.com
+# 留空时使用对应协议的官方地址
+base_url = "https://api.openai.com/v1"
+# 完整请求地址（可选）。填写后忽略 base_url 的自动拼接，适用于路径不规范的代理/网关
+endpoint = ""
+# API Key，推荐使用环境变量 OCS_AI_API_KEY 设置，避免写入文件
+api_key = ""
+# 模型名称，例如 gpt-4o-mini、deepseek-chat、claude-sonnet-4-5
+model = "gpt-4o-mini"
+# 采样温度，答题建议 0 ~ 0.3。注释掉此行则不发送该参数（部分推理模型不支持）
+temperature = 0.1
+# 最大输出 token 数。推理模型（如 deepseek-reasoner、o 系列）请调大到 4096 以上
+# openai 协议注释掉此行则不发送；anthropic 协议必填，未设置时默认 1024
+max_tokens = 1024
+# 单次请求超时（秒）
+timeout_secs = 25
+# 连接超时（秒）
+connect_timeout_secs = 10
+# 网络错误、超时、429、5xx 时的重试次数（401/403/400 等不会重试）
+max_retries = 1
+# 重试间隔基数（毫秒），第 n 次重试等待 n × retry_backoff_ms
+retry_backoff_ms = 800
+# Anthropic 协议的 anthropic-version 请求头
+anthropic_version = "2023-06-01"
+
+# 额外请求头，例如 OpenRouter 的来源标识
+[ai.headers]
+# "HTTP-Referer" = "https://github.com/your-name/ocs-ai-answerer"
+# "X-Title" = "ocs-ai-answerer"
+
+# 额外请求体参数，原样合并到请求 JSON 顶层（会覆盖同名的自动生成字段）
+[ai.extra_body]
+# top_p = 0.9
+# 关闭 Qwen3 等模型的思考模式：
+# enable_thinking = false
+# OpenAI 推理模型使用 max_completion_tokens 时：
+# max_completion_tokens = 4096
+# 结构化输出（仅支持该参数的服务可开启）：
+# response_format = { type = "json_object" }
+
+[answer]
+# 系统提示词，留空使用内置默认值
+system_prompt = ""
+# 各题型的作答指令，留空使用内置默认值。
+# 输出格式要求（JSON 结构）由程序固定追加，无需在这里描述。
+single_prompt = ""
+multiple_prompt = ""
+judgement_prompt = ""
+completion_prompt = ""
+unknown_prompt = ""
+# 是否让模型附带简短解析（返回在响应的 explanation 字段，不影响 OCS 答案）
+include_explanation = false
+# 选择题答案格式：
+#   auto   返回选项原文；若程序模拟 OCS 匹配发现原文无法准确选中，则自动改用字母（推荐）
+#   text   优先返回选项原文
+#   letter 优先返回选项字母，如 A#C#D
+choice_format = "auto"
+# 多选题多个答案之间的分隔符（需属于 OCS 的「答案分隔符」设置，默认包含 #）
+multiple_separator = "#"
+# 填空题多个空之间的分隔符
+completion_separator = "#"
+# 判断题无选项时返回的文本（需能被 OCS 识别，OCS 支持：正确/错误、对/错、是/否、√/× 等）
+judgement_true = "正确"
+judgement_false = "错误"
