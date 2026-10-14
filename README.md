@@ -18,12 +18,13 @@
 6. [Anthropic Compatible API 配置](#anthropic-compatible-api-配置)
 7. [Docker 部署](#docker-部署)
 8. [导入 OCS 题库配置](#导入-ocs-题库配置)
-9. [API 接口说明](#api-接口说明)
-10. [各题型请求与响应示例](#各题型请求与响应示例)
-11. [答案规范化规则](#答案规范化规则)
-12. [配置项参考](#配置项参考)
-13. [常见问题排查](#常见问题排查)
-14. [开发与测试](#开发与测试)
+9. [提高准确率与节省费用](#提高准确率与节省费用)
+10. [API 接口说明](#api-接口说明)
+11. [各题型请求与响应示例](#各题型请求与响应示例)
+12. [答案规范化规则](#答案规范化规则)
+13. [配置项参考](#配置项参考)
+14. [常见问题排查](#常见问题排查)
+15. [开发与测试](#开发与测试)
 
 ---
 
@@ -35,6 +36,9 @@
 - **四种题型**：单选（single）、多选（multiple）、判断（judgement）、填空（completion），以及未知题型的自动推断。
 - **可靠的答案规范化**：优先解析结构化 JSON，对 Markdown 代码块、「答案：B」、「正确答案是 B」、选项原文、`ACD`/`A,C,D`/`A、C、D`、判断同义词、带解释的填空等情况做明确、可测试的回退；无法可靠识别时返回明确错误，绝不瞎猜。
 - **按 OCS 实际匹配逻辑校验答案**：内置 OCS 选项匹配算法的 Rust 移植版，返回前先模拟 OCS 是否会选中且只选中目标选项，必要时自动改用字母或 `===` 分隔格式。
+- **图片题**：支持 OCS「图片题优化」，把题目/选项中的图片以 base64 发送给支持视觉的模型；模型不支持图片时自动降级为纯文本。
+- **答案缓存**：同一道题只付一次费用，可持久化到文件，重启后仍然有效；并发的相同题目合并为一次请求。
+- **准确率增强**：默认先分析后作答（思维链）；输出无法解析时自动要求模型按格式重述；可选多模型/多次采样投票与裁判模型。
 - **工程化**：异步 I/O、HTTP 连接池复用、可配置超时与有限重试（仅对网络错误/超时/429/5xx 重试）、统一错误分类、结构化日志、可选访问令牌。
 
 ## 技术架构
@@ -82,8 +86,9 @@ ocs-ai-answerer/
 │   ├── error.rs             # 分类错误类型
 │   ├── api/                 # HTTP 层：路由、处理器、请求/响应类型、OCS 配置生成
 │   ├── provider/            # AI Provider 抽象层：mod.rs（公共逻辑）、openai.rs、anthropic.rs
-│   └── answer/              # 题目模型、prompt.rs、normalize.rs、ocs.rs（OCS 匹配算法移植）
-└── tests/                   # provider_tests / answer_tests / api_tests
+│   └── answer/              # 答题流程 mod.rs、question.rs（题目模型）、prompt.rs、normalize.rs、
+│                            # ocs.rs（OCS 匹配算法移植）、cache.rs（答案缓存）、ensemble.rs（投票）
+└── tests/                   # provider_tests / answer_tests / api_tests / pipeline_tests
 ```
 
 ## 环境要求
@@ -221,6 +226,8 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
+答案缓存保存在宿主机的 `./data` 目录，容器重建后仍然有效。
+
 默认只映射到本机 `127.0.0.1:3000`。如需远程访问，把 `compose.yaml` 中的端口改为 `"3000:3000"`，**并务必设置 `OCS_ACCESS_TOKEN`**。
 
 想使用完整的配置文件（自定义提示词等）时，复制 `config.example.toml` 为 `config.toml`，并在 `compose.yaml` 中取消 `volumes` 的注释。容器内会自动设置 `OCS_SERVER_HOST=0.0.0.0`。
@@ -258,7 +265,12 @@ docker run -d --name ocs-ai-answerer -p 127.0.0.1:3000:3000 --env-file .env ocs-
     "data": {
       "title": "${title}",
       "type": "${type}",
-      "options": "${options}"
+      "options": "${options}",
+      "images": {
+        "handler": "return (env) => env.images"
+      },
+      "suggestion_title": "${suggestion_title}",
+      "suggestion_options": "${suggestion_options}"
     },
     "handler": "return (res) => res && res.code === 1 ? [res.question, res.answer, { ai: true }] : [res && res.msg ? res.msg : 'AI 题库请求失败', undefined]"
   }
@@ -271,6 +283,7 @@ docker run -d --name ocs-ai-answerer -p 127.0.0.1:3000:3000 --env-file .env ocs-
 
 ### 3. 配置说明
 
+- `images` 字段使用字段解析器 `return (env) => env.images` 原样上传图片数组（如果写成 `"${images}"` 占位符，OCS 会把数组拼成字符串）；`${suggestion_title}`、`${suggestion_options}` 为图片地址替换成 `[图片N]` 后的文本。GET 方式无法上传图片。
 - `${title}`、`${type}`、`${options}` 由 OCS 在请求时替换：`options` 是各选项文本以换行 `\n` 拼接的字符串，`type` 取值为 `single`/`multiple`/`judgement`/`completion`，无法识别时为 `unknown`。
 - `handler` 成功时返回 `[题目, 答案, { ai: true }]`，OCS 会在搜索结果上显示「AI」标签；失败时把错误信息放在题目位置、答案为 `undefined`，这样在 OCS 搜索结果面板里能直接看到失败原因（如 API Key 错误、超时），而不是笼统的「未找到」。
 - 服务端出错时 HTTP 状态码仍为 200、`code` 为 0。这是有意为之：OCS 使用 `GM_xmlhttpRequest` 时，任何非 200 状态码都会被直接丢弃，handler 根本拿不到错误信息。
@@ -295,6 +308,66 @@ docker run -d --name ocs-ai-answerer -p 127.0.0.1:3000:3000 --env-file .env ocs-
 - **混合内容**：网课页面一般是 HTTPS。`fetch` 模式下，HTTPS 页面无法请求 `http://` 的远程地址（浏览器会拦截混合内容，`127.0.0.1` 一般例外）。`GM_xmlhttpRequest` 模式不受此限制。远程部署建议直接使用 HTTPS。
 - **超时**：OCS 等待单个题库 60 秒后判定超时。本服务默认 `server.request_timeout_secs = 55`，超时后会返回明确的错误信息，而不是让 OCS 一直等待。
 
+## 提高准确率与节省费用
+
+没有任何模型能保证 100% 正确，错题主要来自：图片题（模型看不到图）、依赖具体教材的题、多选题漏选或多选、网页抓取的题目文本残缺。本服务在模型侧能做的优化都已内置：
+
+| 手段 | 默认 | 作用 | 代价 |
+| --- | --- | --- | --- |
+| 图片题（`ai.vision`） | 开启 | 图片题可以被正确作答 | 图片会消耗输入 token |
+| 先分析后作答（`answer.step_by_step`） | 开启 | 普通模型准确率明显提升，尤其是计算题和多选题 | 输出 token 增加 |
+| 格式自修复（`answer.self_repair_attempts`） | 1 次 | 模型偶尔不按格式输出时自动纠正，而不是直接失败 | 仅在出错时多一次请求 |
+| 答案缓存（`[cache]`） | 开启 | 重做、换账号时同一道题不再付费 | 无 |
+| 多模型投票（`[ensemble]`） | 关闭 | 不同模型/多次采样取多数，分歧大时交给裁判模型 | 费用约为模型数倍 |
+
+### 模型选择建议
+
+- **图片题**需要视觉模型：GPT-4o / GPT-4.1 系列、Claude、Qwen-VL、GLM-4V 等。DeepSeek 目前不支持图片，请设置 `vision = false`（或让程序自动降级）。
+- **推理模型**（`deepseek-reasoner`、o 系列、开启 thinking 的 Claude）本身会深度思考：建议 `step_by_step = false`、`max_tokens = 8192`、`timeout_secs = 45`，并删除 `temperature`。注意推理模型较慢，单题耗时需在 OCS 的 60 秒限制内。
+- **性价比**：`deepseek-chat` + `step_by_step = true` 已能覆盖绝大多数文字题；再加一个视觉模型作为投票者即可兼顾图片题。
+
+### 多模型投票示例
+
+```toml
+[ai]                                  # 主模型（同时也是第一个投票者）
+provider = "openai"
+base_url = "https://api.deepseek.com/v1"
+api_key  = "sk-..."
+model    = "deepseek-chat"
+vision   = false
+
+[ensemble]
+enabled = true
+samples = 2          # 每个模型最多作答 2 次
+min_agreement = 0.6  # 领先答案得票率低于 60% 时请裁判模型决定
+early_stop = true    # 首轮所有模型一致时直接采用（大多数题只花 N 次请求）
+
+[[ensemble.models]]
+provider = "openai"
+base_url = "https://api.openai.com/v1"
+api_key  = "sk-..."
+model    = "gpt-4.1-mini"
+
+[ensemble.judge]
+provider = "anthropic"
+base_url = "https://api.anthropic.com"
+api_key  = "sk-ant-..."
+model    = "claude-sonnet-4-5"
+```
+
+流程：所有模型先各答一次 → 一致则直接返回 → 不一致时补充采样（使用更高的温度以获得独立的判断）→ 按规范化后的答案计票 → 得票率不足时由裁判模型参考候选答案重新分析。所有轮次都受 `server.request_timeout_secs` 约束：剩余时间不足时不再开启新一轮，超时未返回的投票会被放弃而不会拖垮整个请求。响应中的 `confidence` 为最终答案的得票率，`votes` 为有效票数。
+
+### 答案缓存
+
+- 以「题型 + 归一化题干 + 归一化选项 + 图片」为键，`A.`/`A、` 前缀、空格和标点差异不影响命中。
+- 默认持久化到 `data/cache.jsonl`（Docker 中为挂载的 `./data` 目录）。
+- 发现缓存了错误答案时：`POST /api/cache/forget`（请求体与 `/api/answer` 相同）删除单题，或请求时带上 `"no_cache": true` 强制重新作答；`DELETE /api/cache` 清空全部缓存。
+- 回答失败的题目不会被缓存。
+
+### 图片题
+
+在 OCS「通用 → 全局设置 → 高级设置」中开启 **图片题优化**（默认开启），并使用本项目的 `ocs_config.json`（POST 方式，已包含图片字段）。OCS 会把图片转换为 base64，并把题干中的图片地址替换为 `[图片1]` 这样的占位符，本服务会把图片与占位符一起发给模型。
+
 ## API 接口说明
 
 ### `POST /api/answer`
@@ -307,6 +380,9 @@ docker run -d --name ocs-ai-answerer -p 127.0.0.1:3000:3000 --env-file .env ocs-
 | `type` | string | `single` / `multiple` / `judgement` / `completion` / `unknown`，也接受「单选」「多选题」等中文别名；缺失或未知时自动推断 |
 | `options` | string 或 string[] | 选项。OCS 默认格式为以 `\n` 分隔的字符串，也接受字符串数组；可带或不带 `A.` 前缀 |
 | `token` | string | 可选，访问令牌（也可用 `Authorization: Bearer <token>` 请求头） |
+| `images` | string[] | 可选，图片题的 base64 data URL（或 http 地址），由 OCS 图片题优化提供 |
+| `suggestion_title` / `suggestion_options` | string | 可选，图片地址替换为 `[图片N]` 后的题干/选项 |
+| `no_cache` | bool | 可选，跳过缓存重新作答 |
 
 也接受 `application/x-www-form-urlencoded` 表单。
 
@@ -321,9 +397,12 @@ docker run -d --name ocs-ai-answerer -p 127.0.0.1:3000:3000 --env-file .env ocs-
   "model": "gpt-4o-mini",
   "provider": "openai",
   "elapsed_ms": 1234,
-  "ai": true
+  "ai": true,
+  "cached": false
 }
 ```
+
+启用投票时额外返回 `confidence`（得票率）与 `votes`（有效票数）。
 
 开启 `answer.include_explanation` 时额外返回 `explanation` 字段（不影响 `answer`）。
 
@@ -385,7 +464,15 @@ curl -G http://127.0.0.1:3000/api/answer \
 ```
 
 - 默认**不会**请求模型，`upstream.status` 为 `unchecked`，只代表服务进程正常。
+- `ensemble` 字段列出投票模型与裁判模型，`cache` 字段显示缓存条目数。
 - `GET /health?check=true` 会向模型发送一次真实的小请求，`upstream.status` 为 `ok` 或 `error`（附带错误原因与耗时）。设置了访问令牌时需带上 `token`。
+
+### 缓存管理
+
+- `DELETE /api/cache`：清空全部缓存（含持久化文件）。
+- `POST /api/cache/forget`：删除单道题的缓存，请求体与 `/api/answer` 相同，返回 `{"code":1,"removed":true}`。
+
+设置了访问令牌时同样需要携带。
 
 ### `GET /ocs-config`
 
@@ -439,20 +526,35 @@ OCS 匹配选项的方式（已阅读 OCS 源码 `core/worker/resolvers/*` 确�
 | `ai.api_key` | 空（必填） | `OCS_AI_API_KEY` | API Key |
 | `ai.model` | 空（必填） | `OCS_AI_MODEL` | 模型名称 |
 | `ai.temperature` | `0.1` | `OCS_AI_TEMPERATURE` | 不设置则不发送 |
-| `ai.max_tokens` | `1024` | `OCS_AI_MAX_TOKENS` | OpenAI 不设置则不发送；Anthropic 默认 1024 |
-| `ai.timeout_secs` | `25` | `OCS_AI_TIMEOUT_SECS` | 单次请求超时 |
+| `ai.max_tokens` | `2048` | `OCS_AI_MAX_TOKENS` | OpenAI 不设置则不发送；Anthropic 默认 1024 |
+| `ai.timeout_secs` | `40` | `OCS_AI_TIMEOUT_SECS` | 单次请求超时 |
 | `ai.connect_timeout_secs` | `10` | | 连接超时 |
 | `ai.max_retries` | `1` | `OCS_AI_MAX_RETRIES` | 仅对网络错误、超时、429、5xx 重试 |
 | `ai.retry_backoff_ms` | `800` | | 重试间隔基数 |
 | `ai.anthropic_version` | `2023-06-01` | | Anthropic 版本请求头 |
 | `ai.headers` | 空 | | 额外请求头 |
 | `ai.extra_body` | 空 | | 额外请求体参数 |
+| `ai.vision` | `true` | `OCS_AI_VISION` | 是否发送图片 |
+| `ai.max_concurrency` | `8` | | 对该模型的最大并发请求数 |
+| `ai.name` | 自动 | | 日志中显示的名称 |
 | `answer.system_prompt` 等 | 内置 | | 系统提示词及各题型提示词，留空使用默认值 |
 | `answer.include_explanation` | `false` | | 是否让模型返回简短解析 |
 | `answer.choice_format` | `auto` | | `auto` / `text` / `letter` |
 | `answer.multiple_separator` | `#` | | 多选答案分隔符 |
 | `answer.completion_separator` | `#` | | 填空多空分隔符 |
 | `answer.judgement_true` / `judgement_false` | `正确` / `错误` | | 判断题返回文本 |
+| `answer.step_by_step` | `true` | `OCS_STEP_BY_STEP` | 先分析后作答 |
+| `answer.self_repair_attempts` | `1` | | 输出无法解析时要求重述的次数 |
+| `cache.enabled` | `true` | `OCS_CACHE_ENABLED` | 答案缓存 |
+| `cache.capacity` | `20000` | | 内存缓存条目上限 |
+| `cache.ttl_secs` | `0` | | 有效期，0 为永久 |
+| `cache.file` | 空（示例配置为 `data/cache.jsonl`） | `OCS_CACHE_FILE` | 持久化文件 |
+| `ensemble.enabled` | `false` | | 多模型投票 |
+| `ensemble.samples` | `3` | | 每个模型最多采样次数 |
+| `ensemble.min_agreement` | `0.6` | | 低于该得票率时请求裁判 |
+| `ensemble.early_stop` | `true` | | 首轮一致时提前结束 |
+| `ensemble.models` | 空 | | 额外投票模型（字段同 `[ai]`） |
+| `ensemble.judge` | 无 | | 裁判模型（字段同 `[ai]`） |
 
 优先级：命令行参数 > 环境变量（含 `.env`）> `config.toml` > 默认值。启动时会校验配置，错误会逐条列出；配置文件中拼错的字段名也会直接报错。
 
@@ -469,7 +571,10 @@ OCS 匹配选项的方式（已阅读 OCS 源码 `core/worker/resolvers/*` 确�
 | `provider_rate_limited` (429) | 触发限流，降低 OCS 的答题并发数，或增加 `max_retries` |
 | `provider_connect` | 网络不通、DNS 失败、需要代理。程序会读取系统代理及 `HTTPS_PROXY` 环境变量 |
 | `provider_timeout` / `timeout` | 模型响应太慢，增大 `ai.timeout_secs` 或更换更快的模型；注意总时间要小于 OCS 的 60 秒 |
-| `provider_empty_content` | 推理模型的 `max_tokens` 太小，思考阶段就用完了，调大到 4096 以上 |
+| `provider_empty_content` | 推理模型的 `max_tokens` 太小，思考阶段就用完了，调大到 8192 左右 |
+| 日志提示「模型似乎不支持图片输入」 | 当前模型不支持视觉，图片题已降级为纯文本；换用视觉模型或设置 `vision = false` |
+| 图片题答错 | 确认 OCS 已开启「图片题优化」且使用了最新的 `ocs_config.json`（需为 POST 且包含 `images` 字段），并使用支持图片的模型 |
+| 某道题缓存了错误答案 | `POST /api/cache/forget` 删除该题，或请求时带 `"no_cache": true` |
 | `answer_unrecognized` | 模型没有按格式回答。设置 `log_level = "debug"` 查看原始输出；换用指令遵循更好的模型，或调整提示词 |
 | OCS 提示「不在脚本的白名单中」 | 使用了远程地址，见上文 `@connect` 说明 |
 | OCS 显示「题库请求超时」或连接失败 | 服务没启动、地址填错（服务器上的服务不能用 127.0.0.1）、防火墙未放行端口 |
@@ -488,6 +593,7 @@ cargo build --release          # 构建正式版
 
 - `tests/provider_tests.rs`：OpenAI/Anthropic 请求格式、自定义 Endpoint 与请求头、额外参数、标准响应解析、401/403/429/5xx/HTTP 200 中的错误对象、超时、连接失败、非 JSON 响应、空内容、重试策略。
 - `tests/answer_tests.rs`：选项解析、题型推断、提示词构建、单选/多选/判断/填空的各种输出格式、JSON 与非标准回退、误判防护、无法识别的处理，以及用 OCS 匹配算法验证返回值能被 OCS 正确选中。
+- `tests/pipeline_tests.rs`：答案缓存（命中、持久化、删除、失败不缓存）、并发相同题目合并、格式自修复、图片发送与自动降级、多模型投票（提前结束、多数票、裁判、投票者失败、超时保留已有投票）、并发限制、Retry-After。
 - `tests/api_tests.rs`：GET/POST、缺失参数、上游异常、超时、访问令牌、健康检查、OCS 配置生成、`ocs_config.json` 与生成结果一致、并发请求互不干扰。
 - `src/answer/ocs.rs` 中的单元测试：OCS 匹配算法移植的基本行为。
 

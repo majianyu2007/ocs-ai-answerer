@@ -443,6 +443,18 @@ impl Config {
         if let Some(v) = get("OCS_AI_MAX_RETRIES") {
             self.ai.max_retries = parse("OCS_AI_MAX_RETRIES", v)?;
         }
+        if let Some(v) = get("OCS_AI_VISION") {
+            self.ai.vision = parse_bool("OCS_AI_VISION", &v)?;
+        }
+        if let Some(v) = get("OCS_CACHE_ENABLED") {
+            self.cache.enabled = parse_bool("OCS_CACHE_ENABLED", &v)?;
+        }
+        if let Some(v) = get("OCS_CACHE_FILE") {
+            self.cache.file = v;
+        }
+        if let Some(v) = get("OCS_STEP_BY_STEP") {
+            self.answer.step_by_step = parse_bool("OCS_STEP_BY_STEP", &v)?;
+        }
         Ok(())
     }
 
@@ -505,13 +517,18 @@ impl Config {
     /// Non-fatal configuration smells worth surfacing at startup.
     pub fn warnings(&self) -> Vec<String> {
         let mut out = Vec::new();
-        let worst_case = self.ai.timeout_secs * u64::from(self.ai.max_retries + 1)
-            + self.ai.retry_backoff_ms * u64::from(self.ai.max_retries) / 1000;
-        if worst_case > self.server.request_timeout_secs {
-            out.push(format!(
-                "ai.timeout_secs × (max_retries + 1) ≈ {worst_case}s 超过 server.request_timeout_secs = {}s，后续重试可能被截断",
-                self.server.request_timeout_secs
-            ));
+        let models = std::iter::once(("ai", &self.ai))
+            .chain(self.ensemble.models.iter().map(|m| ("ensemble.models", m)))
+            .chain(self.ensemble.judge.iter().map(|j| ("ensemble.judge", j)));
+        for (label, m) in models {
+            if m.timeout_secs >= self.server.request_timeout_secs {
+                out.push(format!(
+                    "{label}（{}）的 timeout_secs = {}s 不小于 server.request_timeout_secs = {}s，慢请求会先触发整体超时、无法重试",
+                    m.display_name(),
+                    m.timeout_secs,
+                    self.server.request_timeout_secs
+                ));
+            }
         }
         if self.server.request_timeout_secs >= 60 {
             out.push(
@@ -536,6 +553,17 @@ impl Config {
             ));
         }
         out
+    }
+}
+
+fn parse_bool(name: &str, v: &str) -> Result<bool, ConfigError> {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        other => Err(ConfigError::Env {
+            name: name.into(),
+            reason: format!("无法识别的布尔值 \"{other}\"（可用 true/false）"),
+        }),
     }
 }
 

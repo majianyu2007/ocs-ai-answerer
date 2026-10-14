@@ -17,13 +17,16 @@ RUN touch src/main.rs src/lib.rs && cargo build --release --locked \
 
 FROM alpine:3
 RUN apk add --no-cache ca-certificates tzdata \
-    && adduser -D -H -u 10001 app
+    && adduser -D -H -u 10001 app \
+    && mkdir -p /app/data && chown app /app/data
 WORKDIR /app
 COPY --from=builder /app/target/release/ocs-ai-answerer /usr/local/bin/ocs-ai-answerer
 COPY config.example.toml /app/config.example.toml
 
 ENV OCS_SERVER_HOST=0.0.0.0 \
-    OCS_SERVER_PORT=3000
+    OCS_SERVER_PORT=3000 \
+    OCS_CACHE_FILE=/app/data/cache.jsonl
+VOLUME ["/app/data"]
 EXPOSE 3000
 USER app
 

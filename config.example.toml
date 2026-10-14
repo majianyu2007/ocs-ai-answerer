@@ -42,11 +42,11 @@ api_key = ""
 model = "gpt-4o-mini"
 # 采样温度，答题建议 0 ~ 0.3。注释掉此行则不发送该参数（部分推理模型不支持）
 temperature = 0.1
-# 最大输出 token 数。推理模型（如 deepseek-reasoner、o 系列）请调大到 4096 以上
+# 最大输出 token 数（含分析过程）。推理模型（如 deepseek-reasoner、o 系列）请调大到 8192 左右
 # openai 协议注释掉此行则不发送；anthropic 协议必填，未设置时默认 1024
-max_tokens = 1024
+max_tokens = 2048
 # 单次请求超时（秒）
-timeout_secs = 25
+timeout_secs = 40
 # 连接超时（秒）
 connect_timeout_secs = 10
 # 网络错误、超时、429、5xx 时的重试次数（401/403/400 等不会重试）
@@ -55,6 +55,13 @@ max_retries = 1
 retry_backoff_ms = 800
 # Anthropic 协议的 anthropic-version 请求头
 anthropic_version = "2023-06-01"
+# 是否把图片题的图片发送给模型（需要支持图片的模型，如 gpt-4o、claude、qwen-vl）。
+# 模型不支持图片时程序会自动降级为纯文本并记录警告
+vision = true
+# 同时向该模型发起的最大请求数（超出的排队等待，避免触发限流）；0 表示不限制
+max_concurrency = 8
+# 显示名称（日志与投票结果中使用），留空自动生成
+name = ""
 
 # 额外请求头，例如 OpenRouter 的来源标识
 [ai.headers]
@@ -95,3 +102,55 @@ completion_separator = "#"
 # 判断题无选项时返回的文本（需能被 OCS 识别，OCS 支持：正确/错误、对/错、是/否、√/× 等）
 judgement_true = "正确"
 judgement_false = "错误"
+# 让模型先简要分析再给出最终 JSON（思维链）。普通模型准确率明显更高，但输出 token 更多。
+# 使用推理模型（deepseek-reasoner、o 系列、开启 thinking 的 Claude）时可关闭以节省费用
+step_by_step = true
+# 模型回复无法解析时，把回复发回模型要求按格式重述的次数（0 表示不重试）
+self_repair_attempts = 1
+
+[cache]
+# 答案缓存：同一道题只请求一次模型，重做、换账号时直接返回缓存答案，节省费用
+enabled = true
+# 内存中最多保存的题目数
+capacity = 20000
+# 缓存有效期（秒），0 表示永久有效
+ttl_secs = 0
+# 持久化文件（JSON Lines），重启后仍然有效；留空则只保存在内存中
+# Docker 部署时建议放到挂载目录，例如 "/app/data/cache.jsonl"
+file = "data/cache.jsonl"
+
+[ensemble]
+# 多模型/多次采样投票：准确率优先时开启，费用会成倍增加
+#   - 主模型（[ai]）与 [[ensemble.models]] 中的每个模型各作答一次；
+#   - 若全部一致则直接采用（大部分题目只花 N 个模型各一次的费用）；
+#   - 不一致时每个模型再补充采样到 samples 次，按多数票决定；
+#   - 得票率低于 min_agreement 且配置了 judge 时，由裁判模型参考候选答案做最终决定。
+enabled = false
+# 每个模型最多采样次数
+samples = 3
+# 领先答案得票率达到此值时不再请求裁判模型
+min_agreement = 0.6
+# 首轮全部一致时提前结束
+early_stop = true
+
+# 额外的投票模型，字段与 [ai] 完全相同，可以使用不同的服务商。示例：
+# [[ensemble.models]]
+# provider = "openai"
+# base_url = "https://api.deepseek.com/v1"
+# api_key = "sk-..."
+# model = "deepseek-chat"
+# vision = false
+#
+# [[ensemble.models]]
+# provider = "anthropic"
+# base_url = "https://api.anthropic.com"
+# api_key = "sk-ant-..."
+# model = "claude-sonnet-4-5"
+
+# 裁判模型（可选），建议使用最强的模型。字段与 [ai] 相同：
+# [ensemble.judge]
+# provider = "openai"
+# base_url = "https://api.openai.com/v1"
+# api_key = "sk-..."
+# model = "gpt-4.1"
+# max_tokens = 4096
