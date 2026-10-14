@@ -1,0 +1,19 @@
+services:
+  ocs-ai-answerer:
+    build: .
+    image: ocs-ai-answerer:latest
+    container_name: ocs-ai-answerer
+    restart: unless-stopped
+    ports:
+      # 只允许本机访问；需要远程访问时改为 "3000:3000" 并设置 OCS_ACCESS_TOKEN
+      - "127.0.0.1:3000:3000"
+    # 从 .env 读取 OCS_AI_API_KEY 等配置（复制 .env.example 为 .env）
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      OCS_SERVER_HOST: 0.0.0.0
+      OCS_SERVER_PORT: 3000
+    # 可选：使用完整配置文件（先复制 config.example.toml 为 config.toml）
+    # volumes:
+    #   - ./config.toml:/app/config.toml:ro
