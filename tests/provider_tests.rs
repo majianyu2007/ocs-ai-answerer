@@ -11,10 +11,7 @@ use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn req() -> ChatRequest {
-    ChatRequest {
-        system: "sys".into(),
-        user: "hello".into(),
-    }
+    ChatRequest::single("sys", "hello")
 }
 
 fn openai_ok(content: &str) -> Value {

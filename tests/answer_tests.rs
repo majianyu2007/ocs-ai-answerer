@@ -84,11 +84,11 @@ fn unknown_type_is_inferred() {
 fn prompt_contains_question_options_and_format() {
     let q = question("哪种语言用于系统编程？", "single", LANG_OPTS);
     let req = PromptBuilder::new(&AnswerConfig::default()).build(&q);
-    assert!(req.user.contains("哪种语言用于系统编程？"));
-    assert!(req.user.contains("B. Rust"));
-    assert!(req.user.contains("单选题"));
-    assert!(req.user.contains("\"answer\""));
-    assert!(req.user.contains("A-D"));
+    assert!(req.user_text().contains("哪种语言用于系统编程？"));
+    assert!(req.user_text().contains("B. Rust"));
+    assert!(req.user_text().contains("单选题"));
+    assert!(req.user_text().contains("\"answer\""));
+    assert!(req.user_text().contains("A-D"));
     assert!(!req.system.is_empty());
 }
 
@@ -101,10 +101,12 @@ fn custom_prompts_override_defaults() {
     };
     let q = question("t", "multiple", CITY_OPTS);
     let req = PromptBuilder::new(&cfg).build(&q);
-    assert_eq!(req.system, "CUSTOM SYSTEM");
-    assert!(req.user.starts_with("CUSTOM MULTI"));
+    assert!(req.system.starts_with("CUSTOM SYSTEM"));
+    // The reply-format line is always appended because the parser depends on it.
+    assert!(req.system.contains("JSON"));
+    assert!(req.user_text().starts_with("CUSTOM MULTI"));
     // The output format is always appended.
-    assert!(req.user.contains("[\"A\", \"C\"]"));
+    assert!(req.user_text().contains("[\"A\", \"C\"]"));
 }
 
 // ---------- single ----------
@@ -436,4 +438,87 @@ fn unmappable_answer_is_error() {
     let q = question("t", "single", LANG_OPTS);
     let err = parse_model_output(r#"{"answer": "Python"}"#, &q).unwrap_err();
     assert!(matches!(err, AnswerError::Unrecognized { .. }));
+}
+
+// ---------- step-by-step output ----------
+
+#[test]
+fn analysis_then_final_json_uses_last_json() {
+    let q = question("t", "single", LANG_OPTS);
+    let raw = "分析：选项 A 是标记语言，例如 {\"answer\": \"A\"} 这种写法是错误的。\nRust 是系统编程语言。\n\n{\"answer\": \"B\"}";
+    assert_eq!(choices(raw, &q), [1]);
+}
+
+#[test]
+fn analysis_then_fenced_json() {
+    let q = question("t", "multiple", CITY_OPTS);
+    let raw = "逐项分析：\n- 北京：中国城市\n- 东京：日本城市\n\n```json\n{\"answer\": [\"A\", \"B\", \"D\"]}\n```";
+    assert_eq!(choices(raw, &q), [0, 1, 3]);
+}
+
+#[test]
+fn analysis_then_bare_conclusion_line() {
+    let q = question("t", "single", LANG_OPTS);
+    assert_eq!(
+        choices("HTML、CSS 不是编程语言，SQL 是查询语言。\n\nB", &q),
+        [1]
+    );
+    let q = question("t", "judgement", "");
+    let p = parse_model_output("这句话混淆了两个概念。\n\n错误", &q).unwrap();
+    assert_eq!(p.value, AnswerValue::Judgement(false));
+}
+
+// ---------- images ----------
+
+#[test]
+fn image_placeholders_are_shown_to_the_model() {
+    use ocs_ai_answerer::answer::QuestionInput;
+    let q = Question::from_input(QuestionInput {
+        title: "如图 https://x/a.png 所示，结果是？".into(),
+        qtype: "single".into(),
+        options: vec!["A. https://x/b.png\nB. 2".into()],
+        images: vec![
+            "data:image/png;base64,AAAA".into(),
+            "data:image/png;base64,BBBB".into(),
+            "not-an-image".into(),
+        ],
+        suggestion_title: "如图 [图片1] 所示，结果是？".into(),
+        suggestion_options: "A. [图片2]\nB. 2".into(),
+    });
+    assert_eq!(q.images.len(), 2);
+    let req = PromptBuilder::new(&AnswerConfig::default()).build(&q);
+    let text = req.user_text();
+    assert!(text.contains("如图 [图片1] 所示"), "{text}");
+    assert!(text.contains("A. [图片2]"), "{text}");
+    assert!(text.contains("[图片N]"));
+    assert_eq!(req.messages[0].images.len(), 2);
+    // OCS still matches against the original option text.
+    assert_eq!(q.options[0].raw, "A. https://x/b.png");
+}
+
+#[test]
+fn mismatched_suggestion_options_are_ignored() {
+    use ocs_ai_answerer::answer::QuestionInput;
+    let q = Question::from_input(QuestionInput {
+        title: "t".into(),
+        qtype: "single".into(),
+        options: vec!["A. 1\nB. 2\nC. 3".into()],
+        images: vec!["data:image/png;base64,AAAA".into()],
+        suggestion_options: "A. [图片1]".into(),
+        ..Default::default()
+    });
+    assert_eq!(q.options[0].display, "1");
+}
+
+#[test]
+fn fingerprint_ignores_formatting_but_not_content() {
+    let a = question("下面哪种语言？", "single", LANG_OPTS);
+    let b = question(
+        " 下面哪种语言? ",
+        "single",
+        "A、HTML\nB、Rust\nC、CSS\nD、SQL",
+    );
+    let c = question("下面哪种语言？", "multiple", LANG_OPTS);
+    assert_eq!(a.fingerprint(), b.fingerprint());
+    assert_ne!(a.fingerprint(), c.fingerprint());
 }

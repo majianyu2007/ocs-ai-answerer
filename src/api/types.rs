@@ -31,6 +31,27 @@ pub struct AnswerRequest {
     pub options: OptionsInput,
     #[serde(default)]
     pub token: Option<String>,
+    /// Base64 data URLs (or http URLs) from OCS image optimization (`env.images`).
+    #[serde(default)]
+    pub images: OptionsInput,
+    #[serde(default)]
+    pub suggestion_title: Option<String>,
+    #[serde(default)]
+    pub suggestion_options: Option<String>,
+    /// Skip the cache lookup and ask the model again.
+    #[serde(default, deserialize_with = "lenient_bool")]
+    pub no_cache: bool,
+}
+
+/// Accepts `true`, `"true"`, `"1"`, `1`.
+fn lenient_bool<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(match v {
+        serde_json::Value::Bool(b) => b,
+        serde_json::Value::Number(n) => n.as_i64().is_some_and(|n| n != 0),
+        serde_json::Value::String(s) => matches!(s.trim(), "1" | "true" | "yes"),
+        _ => false,
+    })
 }
 
 /// Query form: every value is a plain string.
@@ -44,6 +65,8 @@ pub struct AnswerQuery {
     pub options: Option<String>,
     #[serde(default)]
     pub token: Option<String>,
+    #[serde(default)]
+    pub no_cache: Option<String>,
 }
 
 impl From<AnswerQuery> for AnswerRequest {
@@ -53,6 +76,11 @@ impl From<AnswerQuery> for AnswerRequest {
             qtype: q.qtype,
             options: q.options.map(OptionsInput::Text).unwrap_or_default(),
             token: q.token,
+            no_cache: matches!(
+                q.no_cache.as_deref().map(str::trim),
+                Some("1" | "true" | "yes")
+            ),
+            ..Default::default()
         }
     }
 }
@@ -67,9 +95,14 @@ pub struct AnswerSuccess {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub explanation: Option<String>,
     pub model: String,
-    pub provider: &'static str,
+    pub provider: String,
     pub elapsed_ms: u64,
     pub ai: bool,
+    pub cached: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub votes: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,6 +124,33 @@ pub struct HealthBody {
     pub endpoint: String,
     pub uptime_secs: u64,
     pub upstream: UpstreamStatus,
+    pub ensemble: EnsembleStatus,
+    pub cache: CacheStatus,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EnsembleStatus {
+    pub enabled: bool,
+    pub models: Vec<ModelStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge: Option<ModelStatus>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelStatus {
+    pub name: String,
+    pub provider: &'static str,
+    pub model: String,
+    pub endpoint: String,
+    pub vision: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<UpstreamStatus>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CacheStatus {
+    pub enabled: bool,
+    pub entries: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,6 +177,12 @@ pub struct HealthQuery {
 pub struct OcsConfigQuery {
     #[serde(default)]
     pub method: Option<String>,
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct TokenQuery {
     #[serde(default)]
     pub token: Option<String>,
 }

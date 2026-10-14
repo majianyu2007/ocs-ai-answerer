@@ -11,7 +11,12 @@
     "data": {
       "title": "${title}",
       "type": "${type}",
-      "options": "${options}"
+      "options": "${options}",
+      "images": {
+        "handler": "return (env) => env.images"
+      },
+      "suggestion_title": "${suggestion_title}",
+      "suggestion_options": "${suggestion_options}"
     },
     "handler": "return (res) => res && res.code === 1 ? [res.question, res.answer, { ai: true }] : [res && res.msg ? res.msg : 'AI 题库请求失败', undefined]"
   }

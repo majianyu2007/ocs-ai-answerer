@@ -16,6 +16,8 @@ pub struct Config {
     pub server: ServerConfig,
     pub ai: AiConfig,
     pub answer: AnswerConfig,
+    pub cache: CacheConfig,
+    pub ensemble: EnsembleConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -115,6 +117,12 @@ pub struct AiConfig {
     pub headers: BTreeMap<String, String>,
     /// Merged into the top level of the JSON request body, overriding generated fields.
     pub extra_body: toml::Table,
+    /// Send question images to the model (requires a vision-capable model).
+    pub vision: bool,
+    /// Maximum simultaneous upstream requests for this model; 0 = unlimited.
+    pub max_concurrency: usize,
+    /// Optional display name used in logs and voting results.
+    pub name: String,
 }
 
 impl Default for AiConfig {
@@ -126,19 +134,80 @@ impl Default for AiConfig {
             api_key: String::new(),
             model: String::new(),
             temperature: Some(0.1),
-            max_tokens: Some(1024),
-            timeout_secs: 25,
+            max_tokens: Some(2048),
+            timeout_secs: 40,
             connect_timeout_secs: 10,
             max_retries: 1,
             retry_backoff_ms: 800,
             anthropic_version: "2023-06-01".into(),
             headers: BTreeMap::new(),
             extra_body: toml::Table::new(),
+            vision: true,
+            max_concurrency: 8,
+            name: String::new(),
         }
     }
 }
 
 impl AiConfig {
+    pub fn display_name(&self) -> String {
+        if self.name.trim().is_empty() {
+            format!("{}:{}", self.provider, self.model)
+        } else {
+            self.name.trim().to_string()
+        }
+    }
+
+    fn validate_into(&self, prefix: &str, errors: &mut Vec<String>) {
+        if self.api_key.trim().is_empty() {
+            errors.push(format!(
+                "{prefix}.api_key 未配置（可在 config.toml 中填写，主模型也可设置环境变量 OCS_AI_API_KEY）"
+            ));
+        }
+        if self.model.trim().is_empty() {
+            errors.push(format!(
+                "{prefix}.model 未配置（例如 gpt-4o-mini、deepseek-chat、claude-sonnet-4-5）"
+            ));
+        }
+        if !self.base_url.trim().is_empty() {
+            check_http_url(&format!("{prefix}.base_url"), &self.base_url, errors);
+        }
+        if !self.endpoint.trim().is_empty() {
+            check_http_url(&format!("{prefix}.endpoint"), &self.endpoint, errors);
+        }
+        if let Some(t) = self.temperature
+            && !(0.0..=2.0).contains(&t)
+        {
+            errors.push(format!(
+                "{prefix}.temperature 必须在 0 ~ 2 之间，当前为 {t}"
+            ));
+        }
+        if self.max_tokens == Some(0) {
+            errors.push(format!("{prefix}.max_tokens 必须大于 0"));
+        }
+        if self.timeout_secs == 0 {
+            errors.push(format!("{prefix}.timeout_secs 必须大于 0"));
+        }
+        if self.connect_timeout_secs == 0 {
+            errors.push(format!("{prefix}.connect_timeout_secs 必须大于 0"));
+        }
+        if self.max_retries > 5 {
+            errors.push(format!("{prefix}.max_retries 不应超过 5"));
+        }
+        for (name, value) in &self.headers {
+            if reqwest::header::HeaderName::from_bytes(name.as_bytes()).is_err() {
+                errors.push(format!("{prefix}.headers 中的请求头名称无效: {name}"));
+            }
+            if reqwest::header::HeaderValue::from_str(value).is_err() {
+                errors.push(format!("{prefix}.headers.{name} 的值包含非法字符"));
+            }
+        }
+        if reqwest::header::HeaderValue::from_str(self.api_key.trim()).is_err() {
+            errors.push(format!(
+                "{prefix}.api_key 包含非法字符（请检查是否有换行或中文字符）"
+            ));
+        }
+    }
     pub fn default_base_url(&self) -> &'static str {
         match self.provider {
             ProviderKind::OpenAi => "https://api.openai.com/v1",
@@ -200,6 +269,11 @@ pub struct AnswerConfig {
     pub completion_separator: String,
     pub judgement_true: String,
     pub judgement_false: String,
+    /// When the model's reply cannot be parsed, send it back once with a correction request.
+    pub self_repair_attempts: u32,
+    /// Ask the model to reason briefly before the final JSON. Improves accuracy of non-reasoning
+    /// models at the cost of more output tokens; turn off for reasoning models.
+    pub step_by_step: bool,
 }
 
 impl Default for AnswerConfig {
@@ -217,6 +291,61 @@ impl Default for AnswerConfig {
             completion_separator: "#".into(),
             judgement_true: "正确".into(),
             judgement_false: "错误".into(),
+            self_repair_attempts: 1,
+            step_by_step: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CacheConfig {
+    pub enabled: bool,
+    /// Maximum number of cached answers kept in memory.
+    pub capacity: usize,
+    /// 0 = never expire.
+    pub ttl_secs: u64,
+    /// JSON Lines file used to persist answers across restarts; empty = memory only.
+    pub file: String,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            capacity: 20_000,
+            ttl_secs: 0,
+            file: String::new(),
+        }
+    }
+}
+
+/// Self-consistency voting across several samples and/or models.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct EnsembleConfig {
+    pub enabled: bool,
+    /// Samples requested from each voter (main model + `models`).
+    pub samples: u32,
+    /// Additional voters besides `[ai]`; each entry has the same fields as `[ai]`.
+    pub models: Vec<AiConfig>,
+    /// Asked to decide when votes disagree; falls back to the plurality answer when absent.
+    pub judge: Option<AiConfig>,
+    /// Share of votes the leading answer needs to skip the judge, e.g. 0.6.
+    pub min_agreement: f64,
+    /// Stop sampling early once the first responses all agree.
+    pub early_stop: bool,
+}
+
+impl Default for EnsembleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            samples: 3,
+            models: Vec::new(),
+            judge: None,
+            min_agreement: 0.6,
+            early_stop: true,
         }
     }
 }
@@ -319,54 +448,24 @@ impl Config {
 
     pub fn validate(&self) -> Result<(), ConfigError> {
         let mut errors = Vec::new();
-        let ai = &self.ai;
-
-        if ai.api_key.trim().is_empty() {
-            errors.push(
-                "ai.api_key 未配置（可在 config.toml 中填写，或设置环境变量 OCS_AI_API_KEY）"
-                    .to_string(),
-            );
+        self.ai.validate_into("ai", &mut errors);
+        for (i, m) in self.ensemble.models.iter().enumerate() {
+            m.validate_into(&format!("ensemble.models[{i}]"), &mut errors);
         }
-        if ai.model.trim().is_empty() {
-            errors.push(
-                "ai.model 未配置（例如 gpt-4o-mini、deepseek-chat、claude-sonnet-4-5）".into(),
-            );
+        if let Some(j) = &self.ensemble.judge {
+            j.validate_into("ensemble.judge", &mut errors);
         }
-        if !ai.base_url.trim().is_empty() {
-            check_http_url("ai.base_url", &ai.base_url, &mut errors);
+        if self.ensemble.enabled && self.ensemble.samples == 0 {
+            errors.push("ensemble.samples 必须大于 0".into());
         }
-        if !ai.endpoint.trim().is_empty() {
-            check_http_url("ai.endpoint", &ai.endpoint, &mut errors);
+        if self.ensemble.samples > 9 {
+            errors.push("ensemble.samples 不应超过 9".into());
         }
-        if let Some(t) = ai.temperature
-            && !(0.0..=2.0).contains(&t)
-        {
-            errors.push(format!("ai.temperature 必须在 0 ~ 2 之间，当前为 {t}"));
+        if !(self.ensemble.min_agreement > 0.0 && self.ensemble.min_agreement <= 1.0) {
+            errors.push("ensemble.min_agreement 必须在 (0, 1] 之间".into());
         }
-        if ai.max_tokens == Some(0) {
-            errors.push("ai.max_tokens 必须大于 0".into());
-        }
-        if ai.timeout_secs == 0 {
-            errors.push("ai.timeout_secs 必须大于 0".into());
-        }
-        if ai.connect_timeout_secs == 0 {
-            errors.push("ai.connect_timeout_secs 必须大于 0".into());
-        }
-        if ai.max_retries > 5 {
-            errors.push("ai.max_retries 不应超过 5".into());
-        }
-        for name in ai.headers.keys() {
-            if reqwest::header::HeaderName::from_bytes(name.as_bytes()).is_err() {
-                errors.push(format!("ai.headers 中的请求头名称无效: {name}"));
-            }
-        }
-        for (name, value) in &ai.headers {
-            if reqwest::header::HeaderValue::from_str(value).is_err() {
-                errors.push(format!("ai.headers.{name} 的值包含非法字符"));
-            }
-        }
-        if reqwest::header::HeaderValue::from_str(ai.api_key.trim()).is_err() {
-            errors.push("ai.api_key 包含非法字符（请检查是否有换行或中文字符）".into());
+        if self.answer.self_repair_attempts > 3 {
+            errors.push("answer.self_repair_attempts 不应超过 3".into());
         }
 
         if self.server.request_timeout_secs == 0 {
@@ -424,6 +523,16 @@ impl Config {
             out.push(format!(
                 "服务监听在 {} 且未设置 server.access_token，任何能访问该端口的人都能消耗你的 API 额度",
                 self.server.host
+            ));
+        }
+        if self.ensemble.enabled {
+            let voters = 1 + self.ensemble.models.len() as u32;
+            out.push(format!(
+                "已启用多模型投票：每道题最多请求 {} 次模型（{} 个模型 × {} 次采样{}），费用会相应增加",
+                voters * self.ensemble.samples + u32::from(self.ensemble.judge.is_some()),
+                voters,
+                self.ensemble.samples,
+                if self.ensemble.judge.is_some() { " + 裁判" } else { "" }
             ));
         }
         out

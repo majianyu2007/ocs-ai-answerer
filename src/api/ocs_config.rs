@@ -14,6 +14,13 @@ pub fn answerer_wrapper(base_url: &str, method: &str, token: Option<&str>) -> Va
         "type": "${type}",
         "options": "${options}",
     });
+    // Image questions (OCS「图片题优化」) can only be uploaded via POST. A `${images}` placeholder
+    // would stringify the array, so a field handler passes the array through unchanged.
+    if method == "post" {
+        data["images"] = json!({ "handler": "return (env) => env.images" });
+        data["suggestion_title"] = json!("${suggestion_title}");
+        data["suggestion_options"] = json!("${suggestion_options}");
+    }
     if let Some(token) = token.filter(|t| !t.is_empty()) {
         data["token"] = json!(token);
     }

@@ -10,7 +10,7 @@ use regex::Regex;
 use serde_json::Value;
 
 use super::ocs;
-use super::{Question, QuestionType};
+use super::question::{Question, QuestionType};
 use crate::config::{AnswerConfig, ChoiceFormat};
 use crate::error::AnswerError;
 
@@ -83,19 +83,21 @@ pub fn parse_model_output(raw: &str, q: &Question) -> Result<ParsedAnswer, Answe
 
 /// Finds a JSON `answer` field in the output; returns the answer value and optional explanation.
 fn extract_structured(text: &str) -> Option<(Value, Option<String>)> {
-    let mut candidates: Vec<&str> = vec![text];
-    candidates.extend(
-        CODE_FENCE
-            .captures_iter(text)
-            .filter_map(|c| c.get(1).map(|m| m.as_str())),
-    );
-    for candidate in &candidates {
+    if let Some(found) = parse_json_with_answer(text.trim()) {
+        return Some(found);
+    }
+    // With step-by-step answers the final JSON comes last, so later candidates win.
+    let fences: Vec<&str> = CODE_FENCE
+        .captures_iter(text)
+        .filter_map(|c| c.get(1).map(|m| m.as_str()))
+        .collect();
+    for candidate in fences.iter().rev() {
         if let Some(found) = parse_json_with_answer(candidate.trim()) {
             return Some(found);
         }
     }
-    // JSON objects embedded in prose.
-    for (i, _) in text.match_indices('{') {
+    let starts: Vec<usize> = text.match_indices('{').map(|(i, _)| i).collect();
+    for &i in starts.iter().rev() {
         let mut stream = serde_json::Deserializer::from_str(&text[i..]).into_iter::<Value>();
         if let Some(Ok(v)) = stream.next()
             && let Some(found) = answer_from_json(v)
@@ -105,7 +107,8 @@ fn extract_structured(text: &str) -> Option<(Value, Option<String>)> {
     }
     // Truncated JSON, e.g. cut off by max_tokens inside "explanation".
     ANSWER_FIELD
-        .captures(text)
+        .captures_iter(text)
+        .last()
         .and_then(|c| serde_json::from_str::<Value>(&c[1]).ok())
         .map(|v| (v, None))
 }
@@ -263,6 +266,11 @@ pub fn choices_from_text(text: &str, q: &Question) -> Option<Vec<usize>> {
         if let Some(found) = choices_from_fragment(line, q).or_else(|| leading_letters(line, q)) {
             return Some(found);
         }
+    }
+    // A bare conclusion on the last line ("……\n\nB"), then the first line ("B，因为……").
+    let last_line = text.lines().map(str::trim).rfind(|l| !l.is_empty())?;
+    if let Some(found) = choices_from_fragment(last_line, q) {
+        return Some(found);
     }
     let first_line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
     choices_from_fragment(first_line, q).or_else(|| leading_letters(first_line, q))
@@ -499,6 +507,7 @@ pub fn judgement_from_text(text: &str, q: &Question) -> Option<bool> {
         .last()
         .map(|m| text[m.end()..].trim())
         .into_iter()
+        .chain(text.lines().map(str::trim).rfind(|l| !l.is_empty()))
         .chain(text.lines().map(str::trim).find(|l| !l.is_empty()));
     for candidate in candidates {
         let lower = candidate.to_lowercase();

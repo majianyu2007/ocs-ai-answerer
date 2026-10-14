@@ -340,6 +340,8 @@ async fn ocs_config_is_valid_answerer_wrapper() {
     assert_eq!(w["data"]["type"], "${type}");
     assert!(w["handler"].as_str().unwrap().starts_with("return (res)"));
     assert!(w["data"].get("token").is_none());
+    assert_eq!(w["data"]["images"]["handler"], "return (env) => env.images");
+    assert_eq!(w["data"]["suggestion_title"], "${suggestion_title}");
 
     let app = app_with_public(&server.uri());
     let (_, body) = send(&app, get("/ocs-config?method=get")).await;

@@ -40,9 +40,15 @@ pub fn router(state: AppState) -> Router {
             get(handlers::answer_get).post(handlers::answer_post),
         )
         .route("/health", get(handlers::health))
+        .route("/api/cache", axum::routing::delete(handlers::cache_clear))
+        .route(
+            "/api/cache/forget",
+            axum::routing::post(handlers::cache_forget),
+        )
         .route("/ocs-config", get(handlers::ocs_config))
         .fallback(handlers::not_found)
-        .layer(DefaultBodyLimit::max(1024 * 1024))
+        // Image questions carry base64 images in the body.
+        .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
     // `fetch`-type wrappers run in the page origin and need CORS; GM_xmlhttpRequest does not.
