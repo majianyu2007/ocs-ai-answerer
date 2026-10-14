@@ -2,6 +2,9 @@
 name = "ocs-ai-answerer"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "LLM-powered question bank service for OCS AnswererWrapper (OpenAI / Anthropic compatible)"
+license = "MIT"
 
 [dependencies]
 axum = "0.8.9"
