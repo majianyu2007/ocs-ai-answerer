@@ -1,9 +1,7 @@
 mod common;
 
 use common::question;
-use ocs_ai_answerer::answer::normalize::{
-    AnswerValue, format_for_ocs, parse_model_output,
-};
+use ocs_ai_answerer::answer::normalize::{AnswerValue, format_for_ocs, parse_model_output};
 use ocs_ai_answerer::answer::ocs;
 use ocs_ai_answerer::answer::prompt::PromptBuilder;
 use ocs_ai_answerer::answer::{Question, QuestionType};
@@ -74,7 +72,10 @@ fn unknown_type_is_inferred() {
     );
     // Not silently treated as single choice.
     assert_eq!(question("t", "", LANG_OPTS).qtype, QuestionType::Unknown);
-    assert_eq!(question("t", "多选题", LANG_OPTS).qtype, QuestionType::Multiple);
+    assert_eq!(
+        question("t", "多选题", LANG_OPTS).qtype,
+        QuestionType::Multiple
+    );
 }
 
 // ---------- prompt ----------
@@ -122,7 +123,10 @@ fn single_standard_json() {
 fn single_markdown_code_block() {
     let q = question("t", "single", LANG_OPTS);
     assert_eq!(choices("```json\n{\"answer\": \"B\"}\n```", &q), [1]);
-    assert_eq!(choices("好的，结果如下：\n{\"answer\": \"b\"} 希望有帮助", &q), [1]);
+    assert_eq!(
+        choices("好的，结果如下：\n{\"answer\": \"b\"} 希望有帮助", &q),
+        [1]
+    );
 }
 
 #[test]
@@ -184,7 +188,11 @@ fn out_of_range_letter_is_rejected() {
 #[test]
 fn single_options_with_similar_text_fall_back_to_letter() {
     // "计算机" is contained in "计算机网络", so returning the text could select the wrong option.
-    let q = question("t", "single", "A. 计算机网络\nB. 计算机\nC. 网络\nD. 互联网");
+    let q = question(
+        "t",
+        "single",
+        "A. 计算机网络\nB. 计算机\nC. 网络\nD. 互联网",
+    );
     let a = answer(r#"{"answer":"B"}"#, &q).unwrap();
     assert_ocs_selects(&a, &q, &[1]);
 }
@@ -362,10 +370,7 @@ fn completion_strips_explanation() {
 #[test]
 fn completion_numbered_lines() {
     let q = question("t", "completion", "");
-    assert_eq!(
-        answer("第1空：北京\n第2空：上海", &q).unwrap(),
-        "北京#上海"
-    );
+    assert_eq!(answer("第1空：北京\n第2空：上海", &q).unwrap(), "北京#上海");
     assert_eq!(answer("1. 北京\n2. 上海", &q).unwrap(), "北京#上海");
 }
 

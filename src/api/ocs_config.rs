@@ -1,7 +1,6 @@
 use serde_json::{Value, json};
 
 pub const SERVICE_NAME: &str = "OCS AI Answerer";
-pub const HOMEPAGE: &str = "https://github.com/ocs-ai-answerer/ocs-ai-answerer";
 
 /// Parses the JSON returned by `/api/answer`. On failure the message goes in the question slot so
 /// OCS shows it in the search result panel instead of a silent "no answer".
@@ -20,18 +19,16 @@ pub fn answerer_wrapper(base_url: &str, method: &str, token: Option<&str>) -> Va
     }
     let mut wrapper = json!({
         "name": SERVICE_NAME,
-        "homepage": HOMEPAGE,
         "url": url,
         "method": method,
         "type": "GM_xmlhttpRequest",
         "contentType": "json",
+        "headers": {},
         "data": data,
         "handler": OCS_HANDLER,
     });
     if method == "post" {
         wrapper["headers"] = json!({ "Content-Type": "application/json" });
-    } else {
-        wrapper["headers"] = json!({});
     }
     json!([wrapper])
 }

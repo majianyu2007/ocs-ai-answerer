@@ -65,7 +65,8 @@ async fn openai_request_format() {
 
     let mut cfg = ai_config(ProviderKind::OpenAi, &format!("{}/v1", server.uri()));
     cfg.headers.insert("X-Custom".into(), "yes".into());
-    cfg.extra_body.insert("top_p".into(), toml::Value::Float(0.5));
+    cfg.extra_body
+        .insert("top_p".into(), toml::Value::Float(0.5));
     let client = AiClient::new(&cfg).unwrap();
     let resp = client.complete(&req()).await.unwrap();
     assert_eq!(resp.content, "{\"answer\":\"B\"}");
@@ -177,7 +178,10 @@ fn endpoint_resolution() {
         "https://api.anthropic.com/v1/messages"
     );
     assert_eq!(
-        mk(ProviderKind::Anthropic, "https://gw.example.com/anthropic/v1"),
+        mk(
+            ProviderKind::Anthropic,
+            "https://gw.example.com/anthropic/v1"
+        ),
         "https://gw.example.com/anthropic/v1/messages"
     );
     assert_eq!(
@@ -232,7 +236,10 @@ async fn anthropic_error_body_is_parsed() {
     match err {
         ProviderError::Api { status, message } => {
             assert_eq!(status, 400);
-            assert_eq!(message, "[invalid_request_error] max_tokens: field required");
+            assert_eq!(
+                message,
+                "[invalid_request_error] max_tokens: field required"
+            );
         }
         other => panic!("unexpected {other:?}"),
     }
@@ -250,14 +257,20 @@ async fn forbidden_maps_to_unauthorized() {
         .complete(&req())
         .await
         .unwrap_err();
-    assert!(matches!(err, ProviderError::Unauthorized { status: 403, .. }));
+    assert!(matches!(
+        err,
+        ProviderError::Unauthorized { status: 403, .. }
+    ));
 }
 
 #[tokio::test]
 async fn retries_on_429_then_succeeds() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .respond_with(ResponseTemplate::new(429).set_body_json(json!({ "error": { "message": "slow down" } })))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .set_body_json(json!({ "error": { "message": "slow down" } })),
+        )
         .up_to_n_times(1)
         .expect(1)
         .mount(&server)
@@ -292,7 +305,10 @@ async fn server_error_exhausts_retries() {
         .complete(&req())
         .await
         .unwrap_err();
-    assert!(matches!(err, ProviderError::Server { status: 502, .. }), "{err:?}");
+    assert!(
+        matches!(err, ProviderError::Server { status: 502, .. }),
+        "{err:?}"
+    );
 }
 
 #[tokio::test]
