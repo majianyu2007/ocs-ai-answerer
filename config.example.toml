@@ -80,6 +80,8 @@ name = ""
 # max_completion_tokens = 4096
 # Chat Completions 结构化输出（仅支持该参数的服务可开启；Responses 使用其自身字段）：
 # response_format = { type = "json_object" }
+# Responses 推理模型的思考强度（仅支持该参数的模型可开启）：
+# reasoning = { effort = "high" }
 
 [answer]
 # 系统提示词，留空使用内置默认值

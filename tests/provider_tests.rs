@@ -46,7 +46,6 @@ async fn openai_request_format() {
         .and(header("x-custom", "yes"))
         .and(body_partial_json(json!({
             "model": "test-model",
-            "temperature": 0.1,
             "max_tokens": 256,
             "stream": false,
             "top_p": 0.5,
@@ -80,6 +79,29 @@ async fn openai_omits_unset_optional_params() {
     let body = AiClient::new(&cfg).unwrap().request_body(&req());
     assert!(body.get("temperature").is_none());
     assert!(body.get("max_tokens").is_none());
+}
+
+#[tokio::test]
+async fn omitted_temperature_stays_absent_in_responses_requests() {
+    let cfg: AiConfig = toml::from_str(
+        r#"
+        provider = "openai-responses"
+        api_key = "sk-test"
+        model = "reasoning-model"
+        "#,
+    )
+    .unwrap();
+    let client = AiClient::new(&cfg).unwrap();
+    assert!(client.request_body(&req()).get("temperature").is_none());
+
+    let mut sampling_request = req();
+    sampling_request.temperature = Some(0.7);
+    assert!(
+        client
+            .request_body(&sampling_request)
+            .get("temperature")
+            .is_none()
+    );
 }
 
 #[tokio::test]

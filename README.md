@@ -215,6 +215,15 @@ max_tokens = 8192
 
 认证仍使用 Bearer API Key。请求将系统提示放入 `instructions`、消息放入 `input`，`max_tokens` 映射为 `max_output_tokens`，默认发送 `stream: false`、`store: false`。支持图片输入及答案修复所需的助手历史消息；只读取已完成响应中助手的 `output_text`，失败、未完成或非最终输出不会作为答案。额外参数应使用 Responses API 的字段，而非 Chat Completions 的 `response_format` 等字段。
 
+推理模型可通过配置文件设置思考强度（需要模型支持）：
+
+```toml
+[ai.extra_body]
+reasoning = { effort = "high" }
+```
+
+不支持 `temperature` 的模型应同时省略配置文件中的 `ai.temperature` 和环境变量 `OCS_AI_TEMPERATURE`。未配置时不会发送该参数；仅使用环境变量启动时也不再默认发送 `0.1`。上面的 `reasoning` 使用 Responses API 字段格式，不适用于 Chat Completions。
+
 使用 Docker 的 `.env` 配置时，对应写法如下（不要将真实密钥提交到仓库）：
 
 ```dotenv
@@ -389,7 +398,7 @@ api_key  = "sk-ant-..."
 model    = "claude-sonnet-4-5"
 ```
 
-流程：所有模型先各答一次 → 一致则直接返回 → 不一致时补充采样（使用更高的温度以获得独立的判断）→ 按规范化后的答案计票 → 得票率不足时由裁判模型参考候选答案重新分析。所有轮次都受 `server.request_timeout_secs` 约束：剩余时间不足时不再开启新一轮，超时未返回的投票会被放弃而不会拖垮整个请求。响应中的 `confidence` 为最终答案的得票率，`votes` 为有效票数。
+流程：所有模型先各答一次 → 一致则直接返回 → 不一致时补充采样（仅对显式配置了 `temperature` 的模型提高温度）→ 按规范化后的答案计票 → 得票率不足时由裁判模型参考候选答案重新分析。所有轮次都受 `server.request_timeout_secs` 约束：剩余时间不足时不再开启新一轮，超时未返回的投票会被放弃而不会拖垮整个请求。响应中的 `confidence` 为最终答案的得票率，`votes` 为有效票数。
 
 ### 答案缓存
 
@@ -559,7 +568,7 @@ OCS 匹配选项的方式（已阅读 OCS 源码 `core/worker/resolvers/*` 确�
 | `ai.endpoint` | 空 | `OCS_AI_ENDPOINT` | 完整请求地址，优先于 base_url |
 | `ai.api_key` | 空（必填） | `OCS_AI_API_KEY` | API Key |
 | `ai.model` | 空（必填） | `OCS_AI_MODEL` | 模型名称 |
-| `ai.temperature` | `0.1` | `OCS_AI_TEMPERATURE` | 不设置则不发送 |
+| `ai.temperature` | 未设置 | `OCS_AI_TEMPERATURE` | 不设置则不发送；普通模型可显式设为 `0.1` |
 | `ai.max_tokens` | `2048` | `OCS_AI_MAX_TOKENS` | Responses 映射为 `max_output_tokens`；OpenAI 为 None 时不发送；Anthropic 为 None 时使用 1024 |
 | `ai.timeout_secs` | `40` | `OCS_AI_TIMEOUT_SECS` | 单次请求超时 |
 | `ai.connect_timeout_secs` | `10` | | 连接超时 |

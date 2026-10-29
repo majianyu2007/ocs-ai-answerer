@@ -138,7 +138,7 @@ impl Default for AiConfig {
             endpoint: String::new(),
             api_key: String::new(),
             model: String::new(),
-            temperature: Some(0.1),
+            temperature: None,
             max_tokens: Some(2048),
             timeout_secs: 40,
             connect_timeout_secs: 10,

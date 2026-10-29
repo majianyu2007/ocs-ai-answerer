@@ -464,6 +464,8 @@ async fn extra_samples_use_higher_temperature() {
     cfg.ensemble.enabled = true;
     cfg.ensemble.samples = 3;
     cfg.ensemble.models = vec![voter(&server.uri(), "v1")];
+    cfg.ai.temperature = Some(0.1);
+    cfg.ensemble.models[0].temperature = Some(0.1);
     let _ = ask(&app(cfg), single()).await;
     // Round 1: two voters disagree -> 4 more samples.
     assert_eq!(calls.load(Ordering::SeqCst), 6);

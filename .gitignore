@@ -1,6 +1,7 @@
 /target
 config.toml
 .env
+/.key
 *.log
 .DS_Store
 /data
